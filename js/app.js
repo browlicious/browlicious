@@ -54,6 +54,7 @@ async function ensureGoogle() {
 function parseRoute() { route = location.hash.replace(/^#\/?/, '').split('/').filter(Boolean); }
 
 function render() {
+  if (!db()) return; // storage not loaded yet
   const [name = 'home', arg] = route;
   let out;
   let title = '';
@@ -430,7 +431,7 @@ document.addEventListener('change', async (e) => {
 
 let autoRunning = false;
 async function autoTasks() {
-  if (autoRunning || !navigator.onLine || !G.hasToken()) return;
+  if (!db() || autoRunning || !navigator.onLine || !G.hasToken()) return;
   autoRunning = true;
   const s = db().settings;
   try {
@@ -450,6 +451,7 @@ async function autoTasks() {
 }
 
 document.addEventListener('visibilitychange', () => {
+  if (!db()) return;
   if (document.visibilityState === 'hidden') flush().catch(() => {});
   else { render(); autoTasks(); }
 });
