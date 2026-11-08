@@ -87,4 +87,6 @@ export const DEFAULT_SETTINGS = {
   lastBackupAt: null,
   lastLocalExportAt: null,
   lastCalendarSyncAt: null,
+  // Tags she can tap on a client (editable in Settings).
+  clientTags: ['Reminder set', 'Waiting for reply', 'Call back', 'VIP', 'Do not book'],
 };

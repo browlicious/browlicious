@@ -190,3 +190,14 @@ dialog#sheet::backdrop { background: rgba(30, 25, 20, .45); }
 @media (min-width: 720px) {
   dialog#sheet { margin: auto; border-radius: 18px; }
 }
+
+/* Client list filters, letter headers, tags */
+.filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: -4px 0 8px; }
+.filters select { margin: 0; padding: 8px 10px; font-size: 15px; }
+.letter { padding: 4px 14px; background: #f3ede3; color: var(--gold-dark); font-weight: 700; font-size: .8rem; border-bottom: 1px solid var(--line); }
+.sub.bad { color: var(--bad); font-weight: 600; }
+.chip-tag { background: #efe6f6; color: #6a3f8a; }
+.tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.tag-btn { border: 1px dashed var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: .85rem; cursor: pointer; }
+.tag-btn.on { border-style: solid; border-color: #6a3f8a; background: #efe6f6; color: #6a3f8a; font-weight: 600; }
+.row .chip { white-space: normal; }

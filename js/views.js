@@ -68,7 +68,7 @@ function dueCard(x) {
       <div class="name">${fullName(x.client)}</div>
       <div class="sub">${svc?.name} ${x.state === 'overdue' || x.state === 'lapsed' ? 'was due' : 'due'} ${relDays(x.next.date)}</div>
       <div class="sub muted">Last visit ${fmtDateShort(x.last.start)} (${service(x.last.serviceId)?.name || ''})</div>
-      <div class="chips">${chip(STATE[x.state], x.state)}${texted ? chip(`Texted ${relDays(texted)}`, 'ok') : ''}</div>
+      <div class="chips">${chip(STATE[x.state], x.state)}${texted ? chip(`Texted ${relDays(texted)}`, 'ok') : ''}${tagChips(x.client)}</div>
     </div>
     <div class="actions">
       ${x.client.phone && !x.client.noSms ? html`<button class="btn-sm" data-act="sms-direct" data-client="${x.client.id}" data-tpl="due" data-track="${x.track}">SMS</button>` : ''}
@@ -158,31 +158,160 @@ export function bookingsView(showPast) {
 
 // ---------------- Clients ----------------
 
-export function clientsView(q) {
-  return html`
-    <div class="toolbar">
-      <input type="search" id="client-search" placeholder="Search name, phone or email" value="${q}" autocomplete="off">
-      <button class="btn primary" data-act="client-new">+ Client</button>
-    </div>
-    <div id="client-list">${clientList(q)}</div>`;
+// Filters/sorts for the client list. Keys are stored by app.js between visits.
+export const CLIENT_FILTERS = {
+  all: 'All clients',
+  recent: 'Visited in last 12 months',
+  notRecent: 'No visit in last 12 months',
+  upcoming: 'Has upcoming booking',
+  due: 'Due or overdue',
+  lapsed: 'Lapsed',
+  owing: 'Money owing',
+  texted: 'Texted since last visit',
+  notTexted: 'Due/overdue, not texted yet',
+  tagged: 'Has any tag',
+  never: 'No visits yet',
+};
+
+/** Tag chips for a client (manual tags). */
+export function tagChips(c) {
+  return (c?.tags || []).map((t) => chip(t, 'tag'));
+}
+export const CLIENT_SORTS = {
+  az: 'Name A–Z',
+  za: 'Name Z–A',
+  lastVisit: 'Last visit (newest first)',
+  nextDue: 'Due date (closest to today)',
+  visits: 'Most visits',
+};
+
+/** Per-client summary, cached until the data changes. */
+let summaryCache = { at: null, map: null };
+function clientSummaries() {
+  const d = db();
+  if (summaryCache.at === d.meta.updatedAt && summaryCache.map) return summaryCache.map;
+  const today = startOfDay(new Date());
+  const byClient = new Map();
+  for (const a of d.appointments) {
+    if (!byClient.has(a.clientId)) byClient.set(a.clientId, []);
+    byClient.get(a.clientId).push(a);
+  }
+  const map = new Map();
+  for (const c of d.clients) {
+    const appts = byClient.get(c.id) || [];
+    const happened = appts.filter((a) => a.status !== 'cancelled' && a.status !== 'noshow' && new Date(a.start) < today);
+    const last = happened.sort(byStartDesc)[0] || null;
+    const tracks = trackStatus(c.id);
+    const nextDue = tracks.filter((t) => t.next && t.state !== 'booked').map((t) => t.next.date).sort((x, y) => x - y)[0] || null;
+    // Last text sent after the last visit (any template).
+    const sinceIso = last ? new Date(last.start).toISOString() : '';
+    const textedAt = (c.smsLog || []).filter((l) => l.at > sinceIso).map((l) => l.at).sort().pop() || null;
+    map.set(c.id, {
+      last,
+      textedAt,
+      visits: happened.length,
+      upcoming: appts.some((a) => a.status === 'booked' && new Date(a.start) >= today),
+      owing: appts.reduce((t, a) => t + (a.status === 'done' ? payInfo(a).owing : 0), 0),
+      tracks,
+      urgent: mostUrgent(tracks),
+      nextDue,
+    });
+  }
+  summaryCache = { at: d.meta.updatedAt, map };
+  return map;
 }
 
-export function clientList(q) {
+export function clientsView(state) {
+  const sel = (name, opts, value) => html`<select id="client-${name}" aria-label="${name}">
+    ${Object.entries(opts).map(([k, v]) => html`<option value="${k}" ${k === value ? 'selected' : ''}>${v}</option>`)}</select>`;
+  return html`
+    <div class="toolbar">
+      <input type="search" id="client-search" placeholder="Search name, phone or email" value="${state.q}" autocomplete="off">
+      <button class="btn primary" data-act="client-new">+ Client</button>
+    </div>
+    <div class="filters">
+      ${sel('filter', CLIENT_FILTERS, state.filter)}
+      ${sel('track', { all: 'All services', ...Object.fromEntries(Object.entries(TRACKS).filter(([k]) => k !== 'none')) }, state.track)}
+      ${sel('tag', { all: 'Any tag', ...Object.fromEntries((db().settings.clientTags || []).map((t) => [t, `Tag: ${t}`])) }, state.tag)}
+      ${sel('sort', CLIENT_SORTS, state.sort)}
+    </div>
+    <div id="client-list">${clientList(state)}</div>`;
+}
+
+export function clientList({ q = '', filter = 'all', track = 'all', sort = 'az', tag = 'all' } = {}) {
+  const sums = clientSummaries();
+  const today = startOfDay(new Date());
+  const yearAgo = addDays(today, -365);
   const s = String(q || '').toLowerCase().trim();
   const digits = s.replace(/\D/g, '');
-  const list = db().clients
-    .filter((c) => !s || `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase().includes(s) ||
-      (digits.length >= 3 && String(c.phone || '').replace(/\D/g, '').includes(digits)))
-    .sort((a, b) => fullName(a).localeCompare(fullName(b)));
-  if (!list.length) return empty(s ? 'No matches.' : 'No clients yet. Add one, or import your Google Calendar under More.');
-  return html`<div class="list">${list.slice(0, 300).map((c) => {
-    const u = mostUrgent(trackStatus(c.id));
+
+  const tests = {
+    all: () => true,
+    recent: (x) => x.last && new Date(x.last.start) >= yearAgo,
+    notRecent: (x) => x.visits > 0 && (!x.last || new Date(x.last.start) < yearAgo),
+    upcoming: (x) => x.upcoming,
+    due: (x) => x.tracks.some((t) => t.state === 'due' || t.state === 'overdue'),
+    lapsed: (x) => x.tracks.some((t) => t.state === 'lapsed') && !x.upcoming,
+    owing: (x) => x.owing > 0,
+    texted: (x) => !!x.textedAt,
+    notTexted: (x) => !x.textedAt && !x.upcoming && x.tracks.some((t) => t.state === 'due' || t.state === 'overdue'),
+    tagged: (x, c) => (c.tags || []).length > 0,
+    never: (x) => x.visits === 0 && !x.upcoming,
+  };
+  const test = tests[filter] || tests.all;
+
+  let list = db().clients.filter((c) => {
+    const x = sums.get(c.id);
+    if (!x || !test(x, c)) return false;
+    if (tag !== 'all' && !(c.tags || []).includes(tag)) return false;
+    if (track !== 'all' && !x.tracks.some((t) => t.track === track)) return false;
+    if (!s) return true;
+    return `${c.firstName} ${c.lastName} ${c.email}`.toLowerCase().includes(s) ||
+      (digits.length >= 3 && String(c.phone || '').replace(/\D/g, '').includes(digits));
+  });
+
+  const name = (c) => fullName(c).toLocaleLowerCase();
+  const t = (d) => (d ? new Date(d).getTime() : 0);
+  const sorters = {
+    az: (a, b) => name(a).localeCompare(name(b)),
+    za: (a, b) => name(b).localeCompare(name(a)),
+    lastVisit: (a, b) => t(sums.get(b.id).last?.start) - t(sums.get(a.id).last?.start),
+    // Closest to today first (just overdue and coming up soon at the top), no due date last.
+    nextDue: (a, b) => {
+      const da = sums.get(a.id).nextDue; const db_ = sums.get(b.id).nextDue;
+      const dist = (d) => (d ? Math.abs(t(d) - today.getTime()) : Infinity);
+      return dist(da) - dist(db_);
+    },
+    visits: (a, b) => sums.get(b.id).visits - sums.get(a.id).visits,
+  };
+  list = list.sort(sorters[sort] || sorters.az);
+
+  if (!list.length) {
+    return empty(db().clients.length ? 'No clients match.' : 'No clients yet. Add one, or import your Google Calendar under More.');
+  }
+  const LIMIT = 2000;
+  const showLetters = (sort === 'az' || sort === 'za') && !s;
+  let lastLetter = '';
+  const rows = [];
+  for (const c of list.slice(0, LIMIT)) {
+    const x = sums.get(c.id);
+    if (showLetters) {
+      const L = (fullName(c)[0] || '#').toUpperCase().replace(/[^A-Z]/, '#');
+      if (L !== lastLetter) { rows.push(html`<div class="letter">${L}</div>`); lastLetter = L; }
+    }
+    const u = x.urgent;
     const label = u?.state === 'booked' ? `Booked ${fmtDateShort(u.booked.start)}`
       : u?.next ? `${STATE[u.state]}: ${service(u.next.serviceId)?.name} ${relDays(u.next.date)}` : '';
-    return html`<a class="row" href="#/client/${c.id}">
-      <div><div class="name">${fullName(c)}</div><div class="sub">${c.phone || c.email || ''}</div></div>
-      ${u ? chip(label, u.state) : ''}</a>`;
-  })}</div>${list.length > 300 ? html`<p class="hint">Showing 300 of ${list.length}. Search to narrow down.</p>` : ''}`;
+    rows.push(html`<a class="row" href="#/client/${c.id}">
+      <div><div class="name">${fullName(c)}</div>
+        <div class="sub">${x.last ? `Last visit ${fmtDateShort(x.last.start)} · ${service(x.last.serviceId)?.name || ''}` : 'No visits yet'}${x.visits > 1 ? ` · ${x.visits} visits` : ''}</div>
+        ${x.owing > 0 ? html`<div class="sub bad">${money(x.owing)} owing</div>` : ''}
+        <div class="chips">${u && u.state !== 'none' ? chip(label, u.state) : ''}${tagChips(c)}${x.textedAt ? chip(`Texted ${relDays(x.textedAt)}`, 'ok') : ''}</div>
+      </div></a>`);
+  }
+  return html`<p class="hint">${list.length} client${list.length === 1 ? '' : 's'}</p>
+    <div class="list">${rows}</div>
+    ${list.length > LIMIT ? html`<p class="hint center">Showing ${LIMIT} of ${list.length}. Search or filter to narrow down.</p>` : ''}`;
 }
 
 export function clientView(id) {
@@ -206,6 +335,10 @@ export function clientView(id) {
         <button class="btn" data-act="client-edit" data-id="${c.id}">Edit</button>
       </div>
       ${c.noSms ? html`<p class="hint">Opted out of texts.</p>` : ''}
+      <div class="tag-row" aria-label="Tags">${(db().settings.clientTags || []).map((t) => {
+        const on = (c.tags || []).includes(t);
+        return html`<button class="tag-btn ${on ? 'on' : ''}" data-act="tag-toggle" data-id="${c.id}" data-tag="${t}" aria-pressed="${on}">${on ? '✓ ' : ''}${t}</button>`;
+      })}</div>
     </div>
 
     ${tracks.length ? section('Next due', html`<div class="list">${tracks.map((t) => html`
@@ -333,7 +466,8 @@ export function settingsView() {
       <div class="grid2">
         <label>Show "due soon" days ahead<input name="dueWindowDays" type="number" min="0" value="${s.dueWindowDays}"></label>
         <label>Lapsed after overdue (days)<input name="lapseAfterDays" type="number" min="0" value="${s.lapseAfterDays}"></label>
-      </div>`)}
+      </div>
+      <label>Client tags (comma separated)<input name="clientTags" value="${(s.clientTags || []).join(', ')}"></label>`)}
     ${section('Google account', html`
       <p class="hint">Needed for Google Calendar sync and Drive backups. See README for the one-off Google Cloud setup.</p>
       <label>OAuth client ID<input name="googleClientId" value="${s.googleClientId}" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off"></label>

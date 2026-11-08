@@ -12,7 +12,16 @@ import * as V from './views.js';
 const view = document.getElementById('view');
 const dlg = document.getElementById('sheet');
 let route = [];
-let clientQuery = '';
+// Client list search/filter/sort; remembered on this phone between visits.
+const clientState = { q: '', filter: 'all', track: 'all', tag: 'all', sort: 'az' };
+try { Object.assign(clientState, JSON.parse(localStorage.getItem('clientState') || '{}'), { q: '' }); } catch { /* ignore */ }
+function saveClientState() {
+  try { localStorage.setItem('clientState', JSON.stringify({ ...clientState, q: '' })); } catch { /* ignore */ }
+}
+function refreshClientList() {
+  const el = document.getElementById('client-list');
+  if (el) el.innerHTML = String(V.clientList(clientState));
+}
 
 // ---------------- UI helpers ----------------
 
@@ -60,7 +69,7 @@ function render() {
   let title = '';
   switch (name) {
     case 'bookings': out = V.bookingsView(arg === 'past'); title = 'Bookings'; break;
-    case 'clients': out = V.clientsView(clientQuery); title = 'Clients'; break;
+    case 'clients': out = V.clientsView(clientState); title = 'Clients'; break;
     case 'client': out = V.clientView(arg); title = 'Client'; break;
     case 'more': out = V.moreView(); title = 'More'; break;
     case 'lapsed': out = V.lapsedView(); title = 'Lapsed clients'; break;
@@ -129,6 +138,15 @@ const actions = {
     d.clients = d.clients.filter((x) => x.id !== c.id);
     commit(); closeSheet(); location.hash = '#/clients';
     S.pushSoon({});
+  },
+
+  'tag-toggle': (el) => {
+    const c = client(el.dataset.id);
+    const tag = el.dataset.tag;
+    const tags = new Set(c.tags || []);
+    if (tags.has(tag)) tags.delete(tag); else tags.add(tag);
+    c.tags = [...tags];
+    commit();
   },
 
   'appt-new': (el) => openSheet(V.apptSheet(null, { clientId: el.dataset.client, serviceId: el.dataset.service })),
@@ -361,6 +379,7 @@ const forms = {
     Object.assign(s, {
       businessName: d.businessName.trim(), signature: d.signature.trim(),
       dueWindowDays: num(d.dueWindowDays, 14), lapseAfterDays: num(d.lapseAfterDays, 365),
+      clientTags: [...new Set(String(d.clientTags || '').split(',').map((x) => x.trim()).filter(Boolean))],
       googleClientId: d.googleClientId.trim(),
       calendarSync: d.calendarSync === 'on', calendarId: d.calendarId.trim() || 'primary', importFrom: d.importFrom || '2015-01-01',
       driveBackup: d.driveBackup === 'on', backupIntervalHours: num(d.backupIntervalHours, 24), backupKeep: num(d.backupKeep, 30),
@@ -383,8 +402,8 @@ document.addEventListener('submit', (e) => {
 document.addEventListener('input', (e) => {
   const t = e.target;
   if (t.id === 'client-search') {
-    clientQuery = t.value;
-    document.getElementById('client-list').innerHTML = String(V.clientList(clientQuery));
+    clientState.q = t.value;
+    refreshClientList();
   }
   if (t.name === 'price' && t.form?.dataset.form === 'appt') t.dataset.touched = '1';
 });
@@ -392,6 +411,8 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', async (e) => {
   const t = e.target;
   const f = t.form;
+  const m = /^client-(filter|track|tag|sort)$/.exec(t.id || '');
+  if (m) { clientState[m[1]] = t.value; saveClientState(); refreshClientList(); return; }
   if (f?.dataset.form === 'appt' && ['serviceId', 'date', 'clientName'].includes(t.name)) {
     const svc = service(f.serviceId.value);
     const c = findClientByName(f.clientName.value);
