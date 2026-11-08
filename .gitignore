@@ -1,0 +1,14 @@
+# Never commit client data to this public repo
+*.json
+!manifest.webmanifest
+*.ics
+*.zip
+*.csv
+*.xlsx
+*.jpg
+*.jpeg
+*.heic
+backups/
+exports/
+.claude/
+node_modules/
