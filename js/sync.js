@@ -125,7 +125,7 @@ export function ignoreReview(key) {
 export function newClient(fields = {}) {
   return {
     id: uid(), firstName: '', lastName: '', phone: '', email: '', address: '',
-    skinType: '', pigment: '', notes: '', noSms: false, archived: false, smsLog: [],
+    skinType: '', pigment: '', notes: '', noSms: false, archived: false, smsLog: [], facebook: '', preferredContact: 'sms', tags: [],
     createdAt: new Date().toISOString(), ...fields,
   };
 }

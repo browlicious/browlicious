@@ -7,6 +7,7 @@ import { CONFIG } from './config.js';
 const SCOPES = [
   'https://www.googleapis.com/auth/drive.file',      // only files this app creates
   'https://www.googleapis.com/auth/calendar.events', // read/write events
+  'https://www.googleapis.com/auth/contacts.readonly', // read her Google Contacts (never changed)
 ];
 const DRIVE = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
@@ -55,7 +56,7 @@ export async function signIn() {
       callback: (r) => {
         if (r.error) { reject(new Error(r.error_description || r.error)); return; }
         if (!google.accounts.oauth2.hasGrantedAllScopes(r, ...SCOPES)) {
-          reject(new Error('Please tick both Google Drive and Google Calendar access.'));
+          reject(new Error('Please tick all the boxes (Drive, Calendar and Contacts) when connecting Google.'));
           return;
         }
         token = r.access_token;
@@ -177,4 +178,28 @@ export async function deleteEvent(gcalId) {
   } catch (e) {
     if (e.status !== 404 && e.status !== 410) throw e;
   }
+}
+
+// ---------------- Contacts (read only) ----------------
+
+/** All of her Google Contacts: [{ name, given, family, phones[], emails[] }]. Kept in memory only. */
+export async function listContacts() {
+  const out = [];
+  let pageToken = '';
+  do {
+    const p = new URLSearchParams({ personFields: 'names,phoneNumbers,emailAddresses', pageSize: '1000' });
+    if (pageToken) p.set('pageToken', pageToken);
+    const r = await api(`https://people.googleapis.com/v1/people/me/connections?${p}`);
+    for (const x of r.connections || []) {
+      const n = x.names?.[0] || {};
+      out.push({
+        name: n.displayName || [n.givenName, n.familyName].filter(Boolean).join(' '),
+        given: n.givenName || '', family: n.familyName || '',
+        phones: (x.phoneNumbers || []).map((v) => v.value).filter(Boolean),
+        emails: (x.emailAddresses || []).map((v) => v.value).filter(Boolean),
+      });
+    }
+    pageToken = r.nextPageToken || '';
+  } while (pageToken);
+  return out;
 }

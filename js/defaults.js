@@ -59,15 +59,15 @@ export const DEFAULT_SERVICES = [
 ];
 
 export const DEFAULT_TEMPLATES = [
-  { id: 'confirm', name: 'Booking confirmation',
+  { id: 'confirm', name: 'Booking confirmation', subject: 'Your {business} booking: {day} at {time}',
     body: "Hi {first}, you're booked in for {service} on {day} at {time}. If you need to change it, please give 24 hours' notice. Thanks, {sign}" },
-  { id: 'reminder', name: 'Appointment reminder',
+  { id: 'reminder', name: 'Appointment reminder', subject: 'Reminder: your appointment {when}',
     body: 'Hi {first}, just a reminder of your {service} appointment {when} ({day}) at {time}. Reply to confirm, or let me know if you need to reschedule. {sign}' },
-  { id: 'due', name: 'Follow-up due',
+  { id: 'due', name: 'Follow-up due', subject: 'Time for your {due}',
     body: "Hi {first}, it's coming up to time for your {due} (your last visit was {lastDate}). Would you like me to book you in? Let me know what days suit. {sign}" },
-  { id: 'thanks', name: 'Thank you / aftercare',
+  { id: 'thanks', name: 'Thank you / aftercare', subject: 'Thank you for visiting {business}',
     body: 'Hi {first}, thank you for coming in today! Please follow your aftercare instructions and get in touch if you have any questions. {sign}' },
-  { id: 'payment', name: 'Payment reminder',
+  { id: 'payment', name: 'Payment reminder', subject: 'Payment for your {service}',
     body: 'Hi {first}, a friendly note that {outstanding} is still owing for your {service} on {date}. Thanks, {sign}' },
 ];
 
@@ -88,5 +88,8 @@ export const DEFAULT_SETTINGS = {
   lastLocalExportAt: null,
   lastCalendarSyncAt: null,
   // Tags she can tap on a client (editable in Settings).
+  defaultContact: 'sms',
+  gstRegistered: false,
+  gstRate: 15,
   clientTags: ['Reminder set', 'Waiting for reply', 'Call back', 'VIP', 'Do not book'],
 };

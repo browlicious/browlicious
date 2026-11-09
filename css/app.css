@@ -201,3 +201,21 @@ dialog#sheet::backdrop { background: rgba(30, 25, 20, .45); }
 .tag-btn { border: 1px dashed var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 6px 12px; font: inherit; font-size: .85rem; cursor: pointer; }
 .tag-btn.on { border-style: solid; border-color: #6a3f8a; background: #efe6f6; color: #6a3f8a; font-weight: 600; }
 .row .chip { white-space: normal; }
+
+/* Segmented buttons (message channel) */
+.seg button { flex: 1; border: 0; background: none; padding: 8px; border-radius: 9px; font: inherit; font-weight: 600; color: var(--muted); cursor: pointer; }
+.seg button.on { background: #fff; color: var(--ink); }
+.seg button[disabled] { opacity: .35; cursor: default; }
+
+/* Financial tables */
+.table .trow { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1.2fr; gap: 6px; padding: 9px 12px; border-bottom: 1px solid var(--line); font-size: .9rem; text-decoration: none; color: inherit; align-items: baseline; }
+.table .trow.two { grid-template-columns: 1fr auto; }
+.table .trow span:not(:first-child) { text-align: right; }
+.table .trow.head { background: #f3ede3; font-weight: 700; }
+.table .trow.zero { color: var(--muted); }
+.table .trow:last-child { border-bottom: 0; }
+.toolbar .check { margin: 0; white-space: nowrap; }
+.check-row { justify-content: flex-start; align-items: flex-start; margin: 0; color: var(--ink); font-size: 1rem; }
+.check-row input { width: 22px; height: 22px; margin: 2px 4px 0 0; flex: none; }
+span.bad, b.bad { color: var(--bad); }
+[hidden] { display: none !important; }

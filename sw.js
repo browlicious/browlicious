@@ -1,11 +1,11 @@
 // Offline support: network first (so updates arrive), cache as fallback.
 // Bump VERSION when deploying to clear old caches.
-const VERSION = 'bl-v4';
+const VERSION = 'bl-v5';
 const ASSETS = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './img/logo.png', './img/icon-192.png', './img/icon-512.png',
   './js/app.js', './js/db.js', './js/defaults.js', './js/rules.js', './js/match.js',
-  './js/ics.js', './js/google.js', './js/sync.js', './js/views.js', './js/util.js', './js/config.js',
+  './js/ics.js', './js/google.js', './js/contact.js', './js/contacts.js', './js/finance.js', './js/ghstore.js', './js/views-github.js', './js/sync.js', './js/views.js', './js/util.js', './js/config.js',
 ];
 
 self.addEventListener('install', (e) => {

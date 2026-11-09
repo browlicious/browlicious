@@ -8,6 +8,10 @@ import { readCalendarFile, parseICS } from './ics.js';
 import * as G from './google.js';
 import * as S from './sync.js';
 import * as V from './views.js';
+import { channelFor, openMessage, canMessage } from './contact.js';
+import * as FIN from './finance.js';
+import * as GH from './ghstore.js';
+import * as CT from './contacts.js';
 
 const view = document.getElementById('view');
 const dlg = document.getElementById('sheet');
@@ -72,7 +76,13 @@ function render() {
     case 'clients': out = V.clientsView(clientState); title = 'Clients'; break;
     case 'client': out = V.clientView(arg); title = 'Client'; break;
     case 'more': out = V.moreView(); title = 'More'; break;
+    case 'contacts': out = CT.matchesView(); title = 'Google Contacts'; break;
     case 'lapsed': out = V.lapsedView(); title = 'Lapsed clients'; break;
+    case 'finance': {
+      const mode = arg === 'tax' ? 'tax' : 'calendar';
+      const y = Number(route[2]) || FIN.yearOf(new Date(), mode);
+      out = V.financeView(mode, y); title = 'Financials'; break;
+    }
     case 'services': out = V.servicesView(); title = 'Services'; break;
     case 'templates': out = V.templatesView(); title = 'SMS templates'; break;
     case 'review': out = V.reviewView(Number(arg) || 0); title = 'Calendar import'; break;
@@ -109,13 +119,18 @@ window.addEventListener('save-error', () => toast('Could not save on this phone!
 
 // ---------------- SMS ----------------
 
-function openSms(c, tplId, a = null, track = null) {
+/** Open a template as SMS / email / Facebook (preferred channel unless one is given). */
+async function openSms(c, tplId, a = null, track = null, channel = null) {
+  const ch = channelFor(c, channel);
+  if (!ch) { toast('No phone, email or Facebook saved for this client.', 'error'); return; }
   const t = db().templates.find((x) => x.id === tplId);
-  const body = t ? fill(t.body, V.smsVars(c, a, track)) : '';
-  c.smsLog = [...(c.smsLog || []), { at: new Date().toISOString(), tpl: tplId || 'blank', apptId: a?.id || null }].slice(-50);
+  const vars = V.smsVars(c, a, track);
+  const body = t ? fill(t.body, vars) : '';
+  const subject = t ? V.templateSubject(t, vars) : db().settings.businessName;
+  c.smsLog = [...(c.smsLog || []), { at: new Date().toISOString(), tpl: tplId || 'blank', apptId: a?.id || null, channel: ch }].slice(-50);
   commit();
   closeSheet();
-  window.location.href = smsUrl(c.phone, body);
+  toast(await openMessage(c, ch, subject, body));
 }
 
 // ---------------- Tap actions ----------------
@@ -178,7 +193,7 @@ const actions = {
 
   sms: (el) => {
     const c = client(el.dataset.client);
-    if (!c?.phone) { toast('No mobile number for this client.', 'error'); return; }
+    if (!channelFor(c)) { toast('No phone, email or Facebook saved for this client.', 'error'); return; }
     openSheet(V.smsSheet(c, el.dataset.appt ? appointment(el.dataset.appt) : null));
   },
   'sms-direct': (el) => {
@@ -187,7 +202,11 @@ const actions = {
   },
   'sms-open': (el) => {
     const c = client(el.dataset.client);
-    openSms(c, el.dataset.tpl, el.dataset.appt ? appointment(el.dataset.appt) : null);
+    openSms(c, el.dataset.tpl, el.dataset.appt ? appointment(el.dataset.appt) : null, null, el.dataset.channel || null);
+  },
+  'msg-channel': (el) => {
+    const c = client(el.dataset.client);
+    openSheet(V.smsSheet(c, el.dataset.appt ? appointment(el.dataset.appt) : null, el.dataset.prefer || null, el.dataset.channel));
   },
 
   'service-new': () => openSheet(V.serviceSheet(null)),
@@ -256,6 +275,20 @@ const actions = {
     await S.restoreBackup(data);
     closeSheet(); toast('Backup restored');
   }),
+  'contacts-load': () => guarded(async () => {
+    await ensureGoogle();
+    toast('Reading Google Contacts...');
+    const list = await G.listContacts();
+    const m = CT.buildMatches(list);
+    render();
+    toast(`${list.length} contacts read, ${m.length} suggestions`);
+  }),
+  'gh-sync': () => ghSync({ manual: true }),
+  'gh-disconnect': () => {
+    if (!confirm('Disconnect GitHub storage on this phone? The token and passphrase are removed from this phone. Data in GitHub is not deleted.')) return;
+    GH.disconnect(); toast('GitHub storage disconnected'); render();
+  },
+  'finance-csv': () => { FIN.downloadCsv(); toast('Payments CSV saved to Downloads'); },
   'backup-file': () => { S.downloadLocalBackup(); toast('Backup file saved to Downloads'); },
   wipe: async () => {
     if (!confirm('Erase ALL clients, visits and payments from this phone?')) return;
@@ -289,7 +322,7 @@ const forms = {
     Object.assign(c, {
       firstName: d.firstName.trim(), lastName: d.lastName.trim(), phone: d.phone.trim(), email: d.email.trim(),
       address: d.address.trim(), skinType: d.skinType.trim(), pigment: d.pigment.trim(), notes: d.notes,
-      noSms: d.noSms === 'on',
+      noSms: d.noSms === 'on', facebook: d.facebook.trim(), preferredContact: d.preferredContact || 'sms',
     });
     commit(); closeSheet();
     if (isNew) location.hash = `#/client/${c.id}`;
@@ -327,7 +360,7 @@ const forms = {
     }
     commit();
     S.pushSoon(a);
-    if (isNew && c.phone && !c.noSms) openSheet(V.smsSheet(c, a, 'confirm'));
+    if (isNew && canMessage(c)) openSheet(V.smsSheet(c, a, 'confirm'));
     else closeSheet();
     toast(isNew ? 'Booked' : 'Saved');
   },
@@ -362,7 +395,7 @@ const forms = {
   template(f, d) {
     let t = f.dataset.id ? db().templates.find((x) => x.id === f.dataset.id) : null;
     if (!t) { t = { id: uid() }; db().templates.push(t); }
-    Object.assign(t, { name: d.name.trim(), body: d.body });
+    Object.assign(t, { name: d.name.trim(), subject: d.subject.trim(), body: d.body });
     commit(); closeSheet(); toast('Template saved');
   },
 
@@ -371,6 +404,31 @@ const forms = {
       S.acceptReview(f.dataset.key, { name: d.name, serviceId: d.serviceId, price: d.price, paid: d.paid === 'on' });
       commit();
     } catch (e) { toast(e.message, 'error'); }
+  },
+
+  contacts(f) {
+    const idx = [...f.querySelectorAll('input[name=m]:checked')].map((x) => Number(x.value));
+    if (!idx.length) { toast('Nothing ticked'); return; }
+    const n = CT.apply(idx);
+    commit(); toast(`${n} clients updated`);
+  },
+
+  async github(f, d) {
+    const c = GH.config();
+    const pass = d.passphrase || '';
+    if (pass && pass.length < 10) { toast('Passphrase must be at least 10 characters.', 'error'); return; }
+    if (pass && !c.passphrase && pass !== d.passphrase2) { toast('Passphrases do not match.', 'error'); return; }
+    if (!d.token && !c.token) { toast('Paste the GitHub access token.', 'error'); return; }
+    if (!pass && !c.passphrase) { toast('Choose an encryption passphrase.', 'error'); return; }
+    const changedTarget = d.owner.trim() !== c.owner || d.repo.trim() !== c.repo;
+    GH.saveConfig({
+      owner: d.owner.trim(), repo: d.repo.trim(),
+      ...(d.token ? { token: d.token.trim() } : {}),
+      ...(pass ? { passphrase: pass } : {}),
+    });
+    if (changedTarget || pass || d.token) { try { localStorage.removeItem('ghState'); } catch { /* ignore */ } }
+    toast('Connecting to GitHub...');
+    await ghSync({ manual: true });
   },
 
   settings(f, d) {
@@ -413,6 +471,8 @@ document.addEventListener('change', async (e) => {
   const f = t.form;
   const m = /^client-(filter|track|tag|sort)$/.exec(t.id || '');
   if (m) { clientState[m[1]] = t.value; saveClientState(); refreshClientList(); return; }
+  if (t.id === 'finance-year') { location.hash = `#/finance/${t.dataset.mode}/${t.value}`; return; }
+  if (t.id === 'finance-gst') { db().settings.gstRegistered = t.checked; commit(); return; }
   if (f?.dataset.form === 'appt' && ['serviceId', 'date', 'clientName'].includes(t.name)) {
     const svc = service(f.serviceId.value);
     const c = findClientByName(f.clientName.value);
@@ -471,10 +531,60 @@ async function autoTasks() {
   }
 }
 
+// ---------------- Encrypted GitHub copy ----------------
+
+async function resolveConflict(e) {
+  const when = e.remoteData?.meta?.updatedAt ? new Date(e.remoteData.meta.updatedAt).toLocaleString('en-NZ') : 'unknown time';
+  const useRemote = confirm(
+    `GitHub has data saved from another device (${when}), and this phone also has unsaved changes.\n\n` +
+    'OK = load the GitHub version (a backup file of this phone is saved first)\n' +
+    "Cancel = keep this phone's version and overwrite GitHub");
+  if (useRemote) {
+    S.downloadLocalBackup();
+    await GH.acceptRemote(e.remoteData);
+    toast('Loaded data from GitHub');
+  } else {
+    await GH.push({ force: true });
+    toast("Saved this phone's data to GitHub");
+  }
+  render();
+}
+
+/** Pull GitHub's copy if it changed, then push local changes. */
+async function ghSync({ manual = false } = {}) {
+  if (!GH.isConfigured() || !navigator.onLine) {
+    if (manual) toast(GH.isConfigured() ? 'Offline: will save to GitHub when back online.' : 'GitHub storage is not set up.');
+    return;
+  }
+  try {
+    const r = await GH.pull();
+    if (r === 'loaded') toast('Loaded latest data from GitHub');
+    if (GH.hasPending() || r === 'empty') await GH.push();
+    if (manual) toast('Saved to GitHub');
+  } catch (e) {
+    if (e.conflict) { await resolveConflict(e).catch((x) => { GH.recordError(x); toast(x.message, 'error'); }); return; }
+    console.warn('GitHub sync failed', e);
+    GH.recordError(e);
+    if (manual) toast(e.message, 'error');
+  } finally {
+    if (route[0] === 'settings' || !route[0]) render();
+  }
+}
+
+// Save to GitHub about a minute after the last change, and when the app is put away.
+let ghTimer = null;
+subscribe(() => {
+  if (!GH.hasPending()) return;
+  clearTimeout(ghTimer);
+  ghTimer = setTimeout(() => ghSync(), 60 * 1000);
+});
+
 document.addEventListener('visibilitychange', () => {
   if (!db()) return;
-  if (document.visibilityState === 'hidden') flush().catch(() => {});
-  else { render(); autoTasks(); }
+  if (document.visibilityState === 'hidden') {
+    flush().catch(() => {});
+    if (GH.hasPending()) { clearTimeout(ghTimer); ghSync(); }
+  } else { render(); autoTasks(); ghSync(); }
 });
 
 // ---------------- Boot ----------------
@@ -493,6 +603,7 @@ document.addEventListener('visibilitychange', () => {
   if (G.isConfigured()) G.loadGis().catch(() => {});
   autoTasks();
   setInterval(autoTasks, 15 * 60 * 1000);
+  ghSync();
   if ('serviceWorker' in navigator && location.protocol === 'https:') {
     navigator.serviceWorker.register('./sw.js').catch((e) => console.warn('SW failed', e));
   }

@@ -10,6 +10,10 @@ import { TRACKS } from './defaults.js';
 import { findClientByName } from './match.js';
 import { backupDue, pendingCalendarChanges } from './sync.js';
 import { hasToken, isConfigured } from './google.js';
+import { CHANNELS, available, channelFor, canMessage, channelLabel } from './contact.js';
+import { summary as financeSummary, yearOf, yearLabel, gstPart } from './finance.js';
+import * as GH from './ghstore.js';
+import { githubSection } from './views-github.js';
 
 const STATUS = { booked: 'Booked', done: 'Done', cancelled: 'Cancelled', noshow: 'No-show' };
 const PAY = { paid: 'Paid', part: 'Part-paid', unpaid: 'Unpaid', free: 'No charge' };
@@ -48,7 +52,7 @@ export function apptCard(a, { showDate = false } = {}) {
       </div>
     </div>
     <div class="actions">
-      ${c?.phone && !c.noSms ? html`<button class="btn-sm" data-act="sms" data-client="${c.id}" data-appt="${a.id}">SMS</button>` : ''}
+      ${canMessage(c) ? html`<button class="btn-sm" data-act="sms" data-client="${c.id}" data-appt="${a.id}">${channelLabel(c)}</button>` : ''}
       ${a.status === 'booked' ? html`<button class="btn-sm" data-act="appt-done" data-id="${a.id}">Done</button>` : ''}
       ${a.status === 'done' && p.owing > 0 ? html`<button class="btn-sm primary" data-act="pay" data-id="${a.id}">Pay ${money(p.owing)}</button>` : ''}
     </div>
@@ -68,10 +72,10 @@ function dueCard(x) {
       <div class="name">${fullName(x.client)}</div>
       <div class="sub">${svc?.name} ${x.state === 'overdue' || x.state === 'lapsed' ? 'was due' : 'due'} ${relDays(x.next.date)}</div>
       <div class="sub muted">Last visit ${fmtDateShort(x.last.start)} (${service(x.last.serviceId)?.name || ''})</div>
-      <div class="chips">${chip(STATE[x.state], x.state)}${texted ? chip(`Texted ${relDays(texted)}`, 'ok') : ''}${tagChips(x.client)}</div>
+      <div class="chips">${chip(STATE[x.state], x.state)}${texted ? chip(`Messaged ${relDays(texted)}`, 'ok') : ''}${tagChips(x.client)}</div>
     </div>
     <div class="actions">
-      ${x.client.phone && !x.client.noSms ? html`<button class="btn-sm" data-act="sms-direct" data-client="${x.client.id}" data-tpl="due" data-track="${x.track}">SMS</button>` : ''}
+      ${canMessage(x.client) ? html`<button class="btn-sm" data-act="sms-direct" data-client="${x.client.id}" data-tpl="due" data-track="${x.track}">${channelLabel(x.client)}</button>` : ''}
       <button class="btn-sm primary" data-act="appt-new" data-client="${x.client.id}" data-service="${x.next.serviceId}">Book</button>
     </div>
   </div>`;
@@ -103,6 +107,8 @@ export function homeView() {
 
   const banners = [];
   if (d.review.length) banners.push(html`<a class="banner" href="#/review"><b>${d.review.length}</b> calendar events to match to clients &rsaquo;</a>`);
+  const ghs = GH.state();
+  if (GH.isConfigured() && ghs.lastError) banners.push(html`<button class="banner warn" data-act="gh-sync">Not saved to GitHub: ${ghs.lastError} Tap to retry.</button>`);
   if (backupDue()) {
     banners.push(d.settings.driveBackup
       ? html`<button class="banner warn" data-act="backup-drive">Backup to Google Drive is due. Tap to back up now.</button>`
@@ -167,8 +173,8 @@ export const CLIENT_FILTERS = {
   due: 'Due or overdue',
   lapsed: 'Lapsed',
   owing: 'Money owing',
-  texted: 'Texted since last visit',
-  notTexted: 'Due/overdue, not texted yet',
+  texted: 'Messaged since last visit',
+  notTexted: 'Due/overdue, not messaged yet',
   tagged: 'Has any tag',
   never: 'No visits yet',
 };
@@ -306,7 +312,7 @@ export function clientList({ q = '', filter = 'all', track = 'all', sort = 'az',
       <div><div class="name">${fullName(c)}</div>
         <div class="sub">${x.last ? `Last visit ${fmtDateShort(x.last.start)} · ${service(x.last.serviceId)?.name || ''}` : 'No visits yet'}${x.visits > 1 ? ` · ${x.visits} visits` : ''}</div>
         ${x.owing > 0 ? html`<div class="sub bad">${money(x.owing)} owing</div>` : ''}
-        <div class="chips">${u && u.state !== 'none' ? chip(label, u.state) : ''}${tagChips(c)}${x.textedAt ? chip(`Texted ${relDays(x.textedAt)}`, 'ok') : ''}</div>
+        <div class="chips">${u && u.state !== 'none' ? chip(label, u.state) : ''}${tagChips(c)}${x.textedAt ? chip(`Messaged ${relDays(x.textedAt)}`, 'ok') : ''}</div>
       </div></a>`);
   }
   return html`<p class="hint">${list.length} client${list.length === 1 ? '' : 's'}</p>
@@ -331,10 +337,10 @@ export function clientView(id) {
       ${c.address ? html`<div class="muted">${c.address}</div>` : ''}
       <div class="btn-row">
         <button class="btn primary" data-act="appt-new" data-client="${c.id}">Book</button>
-        ${c.phone && !c.noSms ? html`<button class="btn" data-act="sms" data-client="${c.id}">SMS</button>` : ''}
+        ${canMessage(c) ? html`<button class="btn" data-act="sms" data-client="${c.id}">${channelLabel(c)}</button>` : ''}
         <button class="btn" data-act="client-edit" data-id="${c.id}">Edit</button>
       </div>
-      ${c.noSms ? html`<p class="hint">Opted out of texts.</p>` : ''}
+      ${c.noSms ? html`<p class="hint">Does not want reminder messages.</p>` : html`<p class="hint">Preferred contact: ${CHANNELS[c.preferredContact || db().settings.defaultContact || 'sms']}${channelFor(c) && channelFor(c) !== (c.preferredContact || 'sms') ? ` (no details, using ${CHANNELS[channelFor(c)]})` : ''}</p>`}
       <div class="tag-row" aria-label="Tags">${(db().settings.clientTags || []).map((t) => {
         const on = (c.tags || []).includes(t);
         return html`<button class="tag-btn ${on ? 'on' : ''}" data-act="tag-toggle" data-id="${c.id}" data-tag="${t}" aria-pressed="${on}">${on ? '✓ ' : ''}${t}</button>`;
@@ -369,6 +375,8 @@ export function moreView() {
   const d = db();
   return html`<div class="list">
     <a class="row" href="#/review"><div class="name">Calendar import &amp; review</div>${d.review.length ? chip(String(d.review.length), 'due') : ''}</a>
+    <a class="row" href="#/contacts"><div class="name">Match Google Contacts</div><span class="muted">fill in phones &amp; emails</span></a>
+    <a class="row" href="#/finance"><div class="name">Financials</div><span class="muted">earnings by month &amp; year</span></a>
     <a class="row" href="#/services"><div class="name">Services &amp; prices</div><span class="muted">${d.services.length}</span></a>
     <a class="row" href="#/templates"><div class="name">SMS templates</div><span class="muted">${d.templates.length}</span></a>
     <a class="row" href="#/settings"><div class="name">Settings, Google &amp; backups</div></a>
@@ -496,6 +504,7 @@ export function settingsView() {
       <p class="hint">${s.lastBackupAt ? `Last Drive backup: ${fmtDate(s.lastBackupAt)} ${fmtTime(s.lastBackupAt)}` : 'No Drive backup yet.'}</p>`)}
     <div class="sticky-save"><button class="btn primary wide" type="submit">Save settings</button></div>
   </form>
+  ${githubSection()}
   ${section('Backup file', html`
     <div class="btn-row"><button class="btn" data-act="backup-file">Save backup file</button>
       <label class="btn">Restore from file<input type="file" id="restore-file" accept=".json,application/json" hidden></label></div>
@@ -522,13 +531,16 @@ export function clientSheet(c) {
     </div>
     <label>Mobile<input name="phone" type="tel" value="${c.phone || ''}" autocomplete="off"></label>
     <label>Email<input name="email" type="email" value="${c.email || ''}" autocomplete="off"></label>
+    <label>Facebook (profile link or username)<input name="facebook" value="${c.facebook || ''}" autocomplete="off" placeholder="facebook.com/... or username"></label>
+    <label>Preferred contact<select name="preferredContact">
+      ${Object.entries(CHANNELS).map(([k, v]) => html`<option value="${k}" ${(c.preferredContact || db().settings.defaultContact || 'sms') === k ? 'selected' : ''}>${v}</option>`)}</select></label>
     <label>Address<input name="address" value="${c.address || ''}" autocomplete="off"></label>
     <div class="grid2">
       <label>Skin type<input name="skinType" value="${c.skinType || ''}" placeholder="e.g. III, medium"></label>
       <label>Pigment mix<input name="pigment" value="${c.pigment || ''}"></label>
     </div>
     <label>Notes<textarea name="notes" rows="4">${c.notes || ''}</textarea></label>
-    <label class="check"><input type="checkbox" name="noSms" ${c.noSms ? 'checked' : ''}> Does not want text messages</label>
+    <label class="check"><input type="checkbox" name="noSms" ${c.noSms ? 'checked' : ''}> Does not want reminder messages</label>
     <p class="hint">Health questionnaires and consent forms stay on paper.</p>
     <div class="btn-row">
       <button class="btn primary" type="submit">Save</button>
@@ -630,20 +642,32 @@ export function smsVars(c, a, track) {
   };
 }
 
-export function smsSheet(c, a, prefer = null) {
+/** Email subject for a template (falls back to "<business> - <template name>"). */
+export function templateSubject(t, vars) {
+  return fill(t?.subject || `${db().settings.businessName} - ${t?.name || 'Message'}`, vars);
+}
+
+export function smsSheet(c, a, prefer = null, channel = null) {
   const vars = smsVars(c, a);
+  const ch = channelFor(c, channel);
+  const av = available(c);
   let order = a ? (a.status === 'booked' ? ['reminder', 'confirm'] : ['thanks', 'payment']) : ['due'];
   if (prefer) order = [prefer, ...order];
   const tpls = [...db().templates].sort((x, y) => {
     const ix = order.indexOf(x.id); const iy = order.indexOf(y.id);
     return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy);
   });
-  return sheet(`Text ${c.firstName || fullName(c)}`, html`
-    <p class="hint">Tap a message to open it in Messages. You can still edit it before sending.</p>
+  const how = { sms: 'opens Messages', email: 'opens your email app (Gmail) with subject and text filled in', facebook: 'copies the text and opens Messenger, then paste it' }[ch];
+  return sheet(`Message ${c.firstName || fullName(c)}`, html`
+    <div class="seg">${Object.entries(CHANNELS).map(([k, v]) => html`
+      <button type="button" class="${k === ch ? 'on' : ''}" data-act="msg-channel" data-channel="${k}" data-client="${c.id}" data-appt="${a?.id || ''}" data-prefer="${prefer || ''}" ${av[k] ? '' : 'disabled'}>${v}</button>`)}</div>
+    <p class="hint">Tapping a message ${how}. You can still edit it before sending.</p>
     <div class="list">${tpls.map((t) => html`
-      <button class="row sms-opt" data-act="sms-open" data-tpl="${t.id}" data-client="${c.id}" data-appt="${a?.id || ''}">
-        <div><div class="name">${t.name}</div><div class="sub">${fill(t.body, vars)}</div></div></button>`)}
-      <button class="row sms-opt" data-act="sms-open" data-tpl="" data-client="${c.id}"><div class="name">Blank message</div></button>
+      <button class="row sms-opt" data-act="sms-open" data-tpl="${t.id}" data-client="${c.id}" data-appt="${a?.id || ''}" data-channel="${ch}">
+        <div><div class="name">${t.name}</div>
+        ${ch === 'email' ? html`<div class="sub"><b>${templateSubject(t, vars)}</b></div>` : ''}
+        <div class="sub">${fill(t.body, vars)}</div></div></button>`)}
+      <button class="row sms-opt" data-act="sms-open" data-tpl="" data-client="${c.id}" data-channel="${ch}"><div class="name">Blank message</div></button>
     </div>`);
 }
 
@@ -682,6 +706,7 @@ export function templateSheet(t) {
   return sheet(isNew ? 'New template' : 'Edit template', html`
   <form data-form="template" data-id="${t.id || ''}">
     <label>Name<input name="name" value="${t.name || ''}" required></label>
+    <label>Email subject<input name="subject" value="${t.subject || ''}" placeholder="Used when sending by email"></label>
     <label>Message<textarea name="body" rows="6" required>${t.body || ''}</textarea></label>
     <p class="hint">{first} {name} {service} {day} {date} {time} {when} {due} {lastDate} {outstanding} {sign} {business}</p>
     <div class="btn-row"><button class="btn primary" type="submit">Save</button>
@@ -695,4 +720,41 @@ export function restoreSheet(files) {
     ${files.length ? html`<div class="list">${files.map((f) => html`
       <button class="row" data-act="restore-drive-file" data-id="${f.id}"><div><div class="name">${fmtDate(f.createdTime)} ${fmtTime(f.createdTime)}</div>
       <div class="sub">${f.name} · ${Math.round((Number(f.size) || 0) / 1024)} KB</div></div></button>`)}</div>` : empty('No backups found in Drive.')}`);
+}
+
+// ---------------- Financials ----------------
+
+export function financeView(mode, year) {
+  const s = db().settings;
+  const F = financeSummary(mode, year);
+  const gst = !!s.gstRegistered;
+  const amt = (v) => (gst ? html`${money(v)}<small class="muted"> (ex ${money(v - gstPart(v))})</small>` : money(v));
+  const yearsAvail = [...new Set([...F.years.map(([y]) => y), yearOf(new Date(), mode)])].sort((a, b) => b - a);
+  const diff = F.yearTotal.total - F.prevTotal.total;
+  return html`
+    <div class="seg">
+      <a href="#/finance/calendar/${yearOf(new Date(), 'calendar')}" class="${mode === 'calendar' ? 'on' : ''}">Calendar year</a>
+      <a href="#/finance/tax/${yearOf(new Date(), 'tax')}" class="${mode === 'tax' ? 'on' : ''}">Tax year (Apr–Mar)</a>
+    </div>
+    <div class="toolbar">
+      <select id="finance-year" data-mode="${mode}">${yearsAvail.map((y) => html`<option value="${y}" ${y === year ? 'selected' : ''}>${yearLabel(y, mode)}</option>`)}</select>
+      <label class="check"><input type="checkbox" id="finance-gst" ${gst ? 'checked' : ''}> GST (${s.gstRate || 15}%)</label>
+    </div>
+    <div class="stats">
+      <div><b>${money(F.yearTotal.total)}</b><span>earned</span></div>
+      <div><b>${diff >= 0 ? '+' : '-'}${money(Math.abs(diff))}</b><span>vs previous year</span></div>
+      <div class="${F.owing ? 'bad' : ''}"><b>${money(F.owing)}</b><span>owing now</span></div>
+    </div>
+    ${gst ? html`<p class="hint center">Includes GST of ${money(gstPart(F.yearTotal.total))}. Excluding GST: ${money(F.yearTotal.total - gstPart(F.yearTotal.total))}.</p>` : ''}
+    ${section('By month', html`<div class="list table">
+      <div class="trow head"><span>Month</span><span>EFTPOS</span><span>Cash</span><span>Total</span></div>
+      ${F.months.map((m) => html`<div class="trow ${m.total ? '' : 'zero'}"><span>${m.label}</span><span>${money(m.eftpos)}</span><span>${money(m.cash)}</span><span><b>${amt(m.total)}</b></span></div>`)}
+      <div class="trow head"><span>Total</span><span>${money(F.yearTotal.eftpos)}</span><span>${money(F.yearTotal.cash)}</span><span>${amt(F.yearTotal.total)}</span></div>
+    </div>`)}
+    ${section('By service', F.services.length ? html`<div class="list table">${F.services.map(([n, v]) => html`
+      <div class="trow two"><span>${n} <small class="muted">× ${v.count}</small></span><span><b>${money(v.total)}</b></span></div>`)}</div>` : empty('No payments recorded in this year.'))}
+    ${section(mode === 'tax' ? 'All tax years' : 'All years', F.years.length ? html`<div class="list table">${F.years.map(([y, v]) => html`
+      <a class="trow two" href="#/finance/${mode}/${y}"><span>${yearLabel(y, mode)}</span><span><b>${amt(v.total)}</b></span></a>`)}</div>` : empty('No payments recorded yet.'))}
+    <div class="btn-row"><button class="btn" data-act="finance-csv">Export payments (CSV)</button></div>
+    <p class="hint">Counts payments taken in the app (Done > Cash/EFTPOS). Visits imported from the old calendar are not included.</p>`;
 }
