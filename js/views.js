@@ -6,7 +6,7 @@ import {
   fullName, dateInput, timeInput, telUrl, byStart, byStartDesc, fill,
 } from './util.js';
 import { trackStatus, mostUrgent, payInfo, clientAppts, suggestedPrice } from './rules.js';
-import { TRACKS } from './defaults.js';
+import { TRACKS, GCAL_COLORS } from './defaults.js';
 import { findClientByName } from './match.js';
 import { backupDue, pendingCalendarChanges } from './sync.js';
 import { hasToken, isConfigured } from './google.js';
@@ -406,30 +406,80 @@ export function templatesView() {
       <button class="row" data-act="template-edit" data-id="${t.id}"><div><div class="name">${t.name}</div><div class="sub clamp">${t.body}</div></div></button>`)}</div>`;
 }
 
-export function reviewView(page = 0) {
+/** Review-list filter shared by the screen and the bulk buttons. */
+export function filterReview(items, f = {}) {
+  const today = startOfDay(new Date()).toISOString();
+  const q = String(f.q || '').toLowerCase().trim();
+  const from = f.from ? new Date(f.from + 'T00:00:00').toISOString() : '';
+  const to = f.to ? new Date(f.to + 'T23:59:59').toISOString() : '';
+  return items.filter((r) => {
+    if (f.color && f.color !== 'all') {
+      if (f.color === 'unknown' ? r.colorId !== undefined : (r.colorId ?? null) !== (f.color === 'default' ? '' : f.color)) return false;
+    }
+    if (from && r.start < from) return false;
+    if (to && r.start > to) return false;
+    if (f.when === 'past' && r.start >= today) return false;
+    if (f.when === 'upcoming' && r.start < today) return false;
+    const matched = !!(r.suggestion.serviceId && r.suggestion.name);
+    if (f.match === 'matched' && !matched) return false;
+    if (f.match === 'unmatched' && matched) return false;
+    if (f.repeat === 'hide' && r.recurring) return false;
+    if (q && !(`${r.summary} ${r.description || ''}`).toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+
+const colorKey = (r) => (r.colorId === undefined ? 'unknown' : r.colorId === '' ? 'default' : r.colorId);
+function colorInfo(k) {
+  if (k === 'unknown') return { name: 'No colour info (file import)', hex: 'transparent' };
+  return GCAL_COLORS[k === 'default' ? '' : k] || { name: `Colour ${k}`, hex: '#ccc' };
+}
+
+export function reviewView(page = 0, f = {}) {
   const d = db();
   const PAGE = 40;
-  const items = d.review.slice(page * PAGE, page * PAGE + PAGE);
-  const matched = d.review.filter((r) => r.suggestion.serviceId && r.suggestion.name).length;
-  const unmatched = d.review.filter((r) => !r.suggestion.serviceId).length;
+  const list = filterReview(d.review, f);
+  const items = list.slice(page * PAGE, page * PAGE + PAGE);
+  const matched = list.filter((r) => r.suggestion.serviceId && r.suggestion.name).length;
+  const unmatched = list.filter((r) => !r.suggestion.serviceId).length;
   const opts = db().services;
   const today = startOfDay(new Date());
+  const counts = {};
+  for (const r of filterReview(d.review, { ...f, color: 'all' })) counts[colorKey(r)] = (counts[colorKey(r)] || 0) + 1;
+  const sel = (id, opts2, value) => html`<select id="review-${id}">${Object.entries(opts2).map(([k, v]) => html`<option value="${k}" ${k === (value || Object.keys(opts2)[0]) ? 'selected' : ''}>${v}</option>`)}</select>`;
+  const filtered = list.length !== d.review.length;
   return html`
     <section>
       <h2>Import</h2>
-      <p class="hint">Google Calendar export (.zip or .ics) from calendar.google.com &gt; Settings &gt; Import &amp; export. Or connect Google under Settings and sync directly.</p>
+      <p class="hint">Google Calendar export (.zip or .ics) from calendar.google.com &gt; Settings &gt; Import &amp; export. Or connect Google under Settings and sync directly. Event colours only come through Google sync (the export file has none).</p>
       <div class="btn-row">
         <label class="btn">Choose export file<input type="file" id="ics-file" accept=".ics,.zip,text/calendar,application/zip" hidden></label>
         ${d.settings.calendarSync ? html`<button class="btn" data-act="sync">Sync Google Calendar</button>` : ''}
       </div>
     </section>
     <section>
-      <h2>To review (${d.review.length})</h2>
+      <h2>To review (${filtered ? `${list.length} of ${d.review.length}` : d.review.length})</h2>
       ${d.review.length ? html`
-        <p class="hint">Each event becomes a visit for that client. Past events are marked done, and "Paid" is ticked by default for old visits. Titles with "cancelled" or "no show" are saved with that status. Names that don't match an existing client create a new one.</p>
+        <div class="color-row">
+          <button class="color-chip ${!f.color || f.color === 'all' ? 'on' : ''}" data-act="review-filter" data-key="color" data-val="all">All colours</button>
+          ${Object.keys(counts).sort((a, b) => counts[b] - counts[a]).map((k) => { const ci = colorInfo(k); return html`
+            <button class="color-chip ${f.color === k ? 'on' : ''}" data-act="review-filter" data-key="color" data-val="${k}" title="${ci.name}">
+              <span class="swatch" style="background:${ci.hex}"></span>${ci.name} <small>${counts[k]}</small></button>`; })}
+        </div>
+        <div class="filters">
+          <label>From<input type="date" id="review-from" value="${f.from || ''}"></label>
+          <label>To<input type="date" id="review-to" value="${f.to || ''}"></label>
+          ${sel('when', { all: 'Past and upcoming', past: 'Past only', upcoming: 'Upcoming only' }, f.when)}
+          ${sel('match', { all: 'Matched and unmatched', matched: 'Matched only', unmatched: 'Unmatched only' }, f.match)}
+          ${sel('repeat', { show: 'Include repeating events', hide: 'Hide repeating events' }, f.repeat)}
+          <input type="search" id="review-q" placeholder="Search title" value="${f.q || ''}" autocomplete="off">
+        </div>
+        ${filtered ? html`<p class="hint"><button class="link" data-act="review-filter-clear">Clear filters</button></p>` : ''}
+        <p class="hint">Each event becomes a visit for that client. Past events are marked done, and "Paid" is ticked by default for old visits. Titles with "cancelled" or "no show" are saved with that status. Names that don't match an existing client create a new one. The buttons below only act on the events shown by the filter.</p>
         <div class="btn-row">
-          <button class="btn primary" data-act="review-accept-all" ${matched ? '' : 'disabled'}>Accept all matched (${matched})</button>
+          <button class="btn primary" data-act="review-accept-all" ${matched ? '' : 'disabled'}>Accept matched (${matched})</button>
           <button class="btn" data-act="review-ignore-unmatched" ${unmatched ? '' : 'disabled'}>Ignore unmatched (${unmatched})</button>
+          ${filtered ? html`<button class="btn danger" data-act="review-ignore-shown" ${list.length ? '' : 'disabled'}>Ignore all shown (${list.length})</button>` : ''}
         </div>
         <datalist id="client-names">${d.clients.map((c) => html`<option value="${fullName(c)}">`)}</datalist>
         ${items.map((r) => {
@@ -437,7 +487,7 @@ export function reviewView(page = 0) {
           const existing = sg.name && findClientByName(sg.name);
           const past = new Date(r.start) < today;
           return html`<form class="card review" data-form="review" data-key="${r.key}">
-            <div class="review-head"><b>${r.allDay ? fmtDate(r.start) : `${fmtDate(r.start)} ${fmtTime(r.start)}`}</b>
+            <div class="review-head">${r.colorId !== undefined ? html`<span class="swatch" style="background:${colorInfo(colorKey(r)).hex}" title="${colorInfo(colorKey(r)).name}"></span>` : ''}<b>${r.allDay ? fmtDate(r.start) : `${fmtDate(r.start)} ${fmtTime(r.start)}`}</b>
               ${past ? chip('Past', 'done') : chip('Upcoming', 'booked')}${r.recurring ? chip('Repeating', 'warn') : ''}
               ${sg.status ? chip(sg.status === 'noshow' ? 'No-show' : 'Cancelled', sg.status) : ''}</div>
             <div class="review-title">${r.summary || '(no title)'}</div>
@@ -454,10 +504,11 @@ export function reviewView(page = 0) {
               <button class="btn" type="button" data-act="review-ignore" data-key="${r.key}">Ignore</button></div>
           </form>`;
         })}
-        ${d.review.length > PAGE ? html`<div class="btn-row center">
+        ${list.length > PAGE ? html`<div class="btn-row center">
           ${page > 0 ? html`<a class="btn" href="#/review/${page - 1}">&lsaquo; Prev</a>` : ''}
-          <span class="hint">Page ${page + 1} of ${Math.ceil(d.review.length / PAGE)}</span>
-          ${(page + 1) * PAGE < d.review.length ? html`<a class="btn" href="#/review/${page + 1}">Next &rsaquo;</a>` : ''}</div>` : ''}
+          <span class="hint">Page ${page + 1} of ${Math.ceil(list.length / PAGE)}</span>
+          ${(page + 1) * PAGE < list.length ? html`<a class="btn" href="#/review/${page + 1}">Next &rsaquo;</a>` : ''}</div>` : ''}
+        ${!list.length ? empty('No events match these filters.') : ''}
       ` : empty('Nothing waiting. Import a calendar file or sync Google Calendar.')}
     </section>`;
 }

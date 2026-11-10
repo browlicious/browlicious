@@ -1,6 +1,6 @@
 // Offline support: network first (so updates arrive), cache as fallback.
 // Bump VERSION when deploying to clear old caches.
-const VERSION = 'bl-v5';
+const VERSION = 'bl-v6';
 const ASSETS = [
   './', './index.html', './css/app.css', './manifest.webmanifest',
   './img/logo.png', './img/icon-192.png', './img/icon-512.png',

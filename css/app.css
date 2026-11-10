@@ -219,3 +219,11 @@ dialog#sheet::backdrop { background: rgba(30, 25, 20, .45); }
 .check-row input { width: 22px; height: 22px; margin: 2px 4px 0 0; flex: none; }
 span.bad, b.bad { color: var(--bad); }
 [hidden] { display: none !important; }
+
+/* Review colour filter */
+.color-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.color-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 6px 10px; font: inherit; font-size: .85rem; cursor: pointer; color: var(--ink); }
+.color-chip.on { border-color: var(--gold); box-shadow: 0 0 0 2px var(--gold) inset; font-weight: 600; }
+.color-chip small { color: var(--muted); }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); flex: none; vertical-align: middle; margin-right: 4px; }
+.filters label { margin: 0; }

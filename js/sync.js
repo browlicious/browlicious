@@ -23,6 +23,8 @@ function fromGcal(ev) {
     summary: ev.summary || '',
     description: ev.description || '',
     start, end, allDay,
+    colorId: ev.colorId ? String(ev.colorId) : '',
+    recurring: !!ev.recurringEventId,
     cancelled: ev.status === 'cancelled',
   };
 }
@@ -62,13 +64,18 @@ export function ingest(events) {
     }
     if (ignored.has(key)) continue;
     const existing = reviewByKey.get(key);
-    if (existing) { if (e.gcalId) existing.gcalId = e.gcalId; continue; }
+    if (existing) {
+      if (e.gcalId) existing.gcalId = e.gcalId;
+      if (e.colorId !== undefined) existing.colorId = e.colorId; // fills colours on re-sync
+      if (e.recurring) existing.recurring = true;
+      continue;
+    }
 
     const description = stripHtml(e.description);
     const item = {
       key, source: e.source, gcalId: e.gcalId || null, icalUid: e.icalUid,
       summary: e.summary, description, start: startIso, durationMin: e.allDay ? 0 : dur,
-      allDay: !!e.allDay, recurring: !!e.recurring,
+      allDay: !!e.allDay, recurring: !!e.recurring, colorId: e.colorId,
       // Facebook / Eventbrite events saved to the calendar are never client bookings.
       suggestion: /fb:\/\/event|facebook\.com\/events|eventbrite\./i.test(description)
         ? { ...suggest(''), name: '' }
@@ -107,13 +114,23 @@ export function acceptReview(key, { name, serviceId, price, paid, status }) {
     durationMin: r.durationMin || svc.durationMin,
     status: status || r.suggestion.status || (past ? 'done' : 'booked'),
     price: p, notes: [r.summary, r.description].filter(Boolean).join('\n'),
-    gcalId: r.gcalId, icalUid: r.icalUid, source: r.source,
+    gcalId: r.gcalId, icalUid: r.icalUid, source: r.source, gcalColor: r.colorId,
     paidHistoric: past && !!paid && !(status || r.suggestion.status), gcalDirty: false,
     createdAt: new Date().toISOString(),
   };
   d.appointments.push(a);
   d.review.splice(i, 1);
   return a;
+}
+
+/** Ignore many review items at once (fast for thousands). */
+export function ignoreMany(keys) {
+  const d = db();
+  const set = new Set(keys);
+  d.review = d.review.filter((r) => !set.has(r.key));
+  const ig = new Set(d.ignored);
+  for (const k of set) ig.add(k);
+  d.ignored = [...ig];
 }
 
 export function ignoreReview(key) {

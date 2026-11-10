@@ -22,6 +22,16 @@ try { Object.assign(clientState, JSON.parse(localStorage.getItem('clientState') 
 function saveClientState() {
   try { localStorage.setItem('clientState', JSON.stringify({ ...clientState, q: '' })); } catch { /* ignore */ }
 }
+// Review-list filters (colour, dates, matched...), remembered on this phone.
+let reviewState = {};
+try { reviewState = JSON.parse(localStorage.getItem('reviewState') || '{}'); } catch { /* ignore */ }
+function setReviewFilter(patchObj) {
+  reviewState = { ...reviewState, ...patchObj };
+  try { localStorage.setItem('reviewState', JSON.stringify(reviewState)); } catch { /* ignore */ }
+  if (location.hash !== '#/review') location.hash = '#/review'; else render();
+}
+const reviewShown = () => V.filterReview(db().review, reviewState);
+
 function refreshClientList() {
   const el = document.getElementById('client-list');
   if (el) el.innerHTML = String(V.clientList(clientState));
@@ -85,20 +95,18 @@ function render() {
     }
     case 'services': out = V.servicesView(); title = 'Services'; break;
     case 'templates': out = V.templatesView(); title = 'SMS templates'; break;
-    case 'review': out = V.reviewView(Number(arg) || 0); title = 'Calendar import'; break;
+    case 'review': out = V.reviewView(Number(arg) || 0, reviewState); title = 'Calendar import'; break;
     case 'settings': out = V.settingsView(); title = 'Settings'; break;
     default: out = V.homeView();
   }
   // Keep the search box focused while typing.
-  const searching = document.activeElement?.id === 'client-search';
+  const focusId = ['client-search', 'review-q'].includes(document.activeElement?.id) ? document.activeElement.id : null;
   view.innerHTML = String(out);
   document.getElementById('page-title').textContent = title;
   const tab = { home: 'home', bookings: 'bookings', clients: 'clients', client: 'clients' }[name] || 'more';
   document.querySelectorAll('.tabs a').forEach((a) => a.classList.toggle('on', a.dataset.tab === tab));
-  if (searching) {
-    const s = document.getElementById('client-search');
-    s.focus(); s.setSelectionRange(s.value.length, s.value.length);
-  }
+  const s = focusId && document.getElementById(focusId);
+  if (s) { s.focus(); s.setSelectionRange(s.value.length, s.value.length); }
   if (name === 'settings') fillStorageInfo();
 }
 
@@ -231,9 +239,17 @@ const actions = {
   },
 
   'review-ignore': (el) => { S.ignoreReview(el.dataset.key); commit(); },
+  'review-filter': (el) => setReviewFilter({ [el.dataset.key]: el.dataset.val }),
+  'review-filter-clear': () => { reviewState = {}; setReviewFilter({}); },
+  'review-ignore-shown': () => {
+    const items = reviewShown();
+    if (!confirm(`Ignore all ${items.length} events shown by this filter? They won't come back on the next sync.`)) return;
+    S.ignoreMany(items.map((r) => r.key));
+    commit(); toast(`${items.length} events ignored`);
+  },
   'review-accept-all': () => {
-    const items = db().review.filter((r) => r.suggestion.serviceId && r.suggestion.name);
-    if (!confirm(`Accept ${items.length} matched events as visits? Past ones will be marked done and paid.`)) return;
+    const items = reviewShown().filter((r) => r.suggestion.serviceId && r.suggestion.name);
+    if (!confirm(`Accept ${items.length} matched events (shown by the filter) as visits? Past ones will be marked done and paid.`)) return;
     let n = 0;
     for (const r of items) {
       try { S.acceptReview(r.key, { name: r.suggestion.name, serviceId: r.suggestion.serviceId, price: r.suggestion.price ?? '', paid: true, status: r.suggestion.status }); n++; } catch (e) { console.warn(e); }
@@ -241,10 +257,10 @@ const actions = {
     commit(); toast(`${n} visits added`);
   },
   'review-ignore-unmatched': () => {
-    const items = db().review.filter((r) => !r.suggestion.serviceId);
-    if (!confirm(`Ignore ${items.length} events with no recognised service? (Personal events, holidays, etc.)`)) return;
-    items.forEach((r) => S.ignoreReview(r.key));
-    commit();
+    const items = reviewShown().filter((r) => !r.suggestion.serviceId);
+    if (!confirm(`Ignore ${items.length} events (shown by the filter) with no recognised service? (Personal events, holidays, etc.)`)) return;
+    S.ignoreMany(items.map((r) => r.key));
+    commit(); toast(`${items.length} events ignored`);
   },
 
   sync: () => guarded(async () => {
@@ -459,6 +475,7 @@ document.addEventListener('submit', (e) => {
 
 document.addEventListener('input', (e) => {
   const t = e.target;
+  if (t.id === 'review-q') { clearTimeout(window.__rq); window.__rq = setTimeout(() => setReviewFilter({ q: t.value }), 300); }
   if (t.id === 'client-search') {
     clientState.q = t.value;
     refreshClientList();
@@ -471,6 +488,8 @@ document.addEventListener('change', async (e) => {
   const f = t.form;
   const m = /^client-(filter|track|tag|sort)$/.exec(t.id || '');
   if (m) { clientState[m[1]] = t.value; saveClientState(); refreshClientList(); return; }
+  const rv = /^review-(from|to|when|match|repeat)$/.exec(t.id || '');
+  if (rv) { setReviewFilter({ [rv[1]]: t.value }); return; }
   if (t.id === 'finance-year') { location.hash = `#/finance/${t.dataset.mode}/${t.value}`; return; }
   if (t.id === 'finance-gst') { db().settings.gstRegistered = t.checked; commit(); return; }
   if (f?.dataset.form === 'appt' && ['serviceId', 'date', 'clientName'].includes(t.name)) {
